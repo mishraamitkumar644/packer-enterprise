@@ -41,13 +41,6 @@ jobs:
 
 # ---------------------------------------------------------------
 # JOB 2 — Detect + Build + Deploy (single job, sequential steps)
-#
-# Why one job? Because packer-build was "skipped" so deploy-vm
-# never ran. GitHub Actions skips downstream jobs when an
-# upstream job is skipped — even if your condition says otherwise.
-#
-# Solution: detect, build, and deploy all in one job.
-# Steps inside a job run sequentially — no skip problem.
 # ---------------------------------------------------------------
 
   build-and-deploy:
@@ -88,18 +81,30 @@ jobs:
           fi
 
           count=$(echo "$dirs" | jq 'length')
-          echo "dirs=${dirs}"  >> "$GITHUB_OUTPUT"
+          echo "dirs=${dirs}"   >> "$GITHUB_OUTPUT"
           echo "count=${count}" >> "$GITHUB_OUTPUT"
           echo "Detected ${count} changed image(s): ${dirs}"
 
       # ---------------------------------------------------------
-      # STEP B — Packer build (skipped if nothing changed)
+      # STEP B — Debug: confirm .pkr.hcl file is present
+      # Remove this step once pipeline is stable
+      # ---------------------------------------------------------
+      - name: Debug packer dir contents
+        if: steps.detect.outputs.count != '0'
+        run: |
+          echo "=== Repo packer tree ==="
+          find packer -type f | sort
+
+      # ---------------------------------------------------------
+      # STEP C — Packer build (skipped if nothing changed)
+      # NOTE: your file must be named ubuntu-nginx.pkr.hcl
+      #       (dot before pkr), NOT ubuntu-nginx_pkr.hcl
       # ---------------------------------------------------------
       - name: Setup Packer
         if: steps.detect.outputs.count != '0'
         uses: hashicorp/setup-packer@main
 
-      - name: Packer build
+      - name: Packer init and build
         if: steps.detect.outputs.count != '0'
         run: |
           for dir in $(echo '${{ steps.detect.outputs.dirs }}' | jq -r '.[]'); do
@@ -111,7 +116,7 @@ jobs:
           done
 
       # ---------------------------------------------------------
-      # STEP C — Deploy VM with Terraform
+      # STEP D — Deploy VM with Terraform
       # Runs only when packer built at least one image.
       # Terraform is idempotent — VM exists? does nothing.
       # ---------------------------------------------------------
