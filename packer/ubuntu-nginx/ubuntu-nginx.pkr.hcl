@@ -105,6 +105,6 @@ build {
 
   provisioner "shell" {
 
-    script = "scripts/install.sh"
+    script = "${path.root}/scripts/install.sh"
   }
 }
