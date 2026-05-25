@@ -40,9 +40,9 @@ jobs:
 
       - run: terraform init
 
-      - run: terraform plan   -state=/dev/null
+      - run: terraform plan   -state=/tmp/foundation.tfstate
 
-      - run: terraform apply  -state=/dev/null -auto-approve
+      - run: terraform apply  -state=/tmp/foundation.tfstate -auto-approve
 
 
 # ---------------------------------------------------------------
@@ -147,10 +147,10 @@ jobs:
 
       - run: terraform init
 
-      - run: terraform plan  -state=/dev/null
+      - run: terraform plan  -state=/tmp/vm.tfstate
               -var="image_version=${{ needs.detect-images.outputs.version }}"
               -var="ssh_public_key=${{ secrets.AZURE_VM_SSH_PUBLIC_KEY }}"
 
-      - run: terraform apply -state=/dev/null -auto-approve
+      - run: terraform apply -state=/tmp/vm.tfstate -auto-approve
               -var="image_version=${{ needs.detect-images.outputs.version }}"
               -var="ssh_public_key=${{ secrets.AZURE_VM_SSH_PUBLIC_KEY }}"
