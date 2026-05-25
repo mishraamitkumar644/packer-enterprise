@@ -45,9 +45,23 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
+        # ARM_* variables supply credentials to the azurerm backend.
+        # The backend initializes before the provider and reads its own
+        # auth independently — without these it cannot construct the
+        # OIDC token request and fails with 401.
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC:        "true"
         run: terraform init
 
       - name: Terraform Apply
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC:        "true"
         run: terraform apply -auto-approve
 
 # =====================================================
@@ -80,9 +94,19 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC:        "true"
         run: terraform init
 
       - name: Terraform Apply
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC:        "true"
         run: terraform apply -auto-approve
 
 # =====================================================
@@ -103,8 +127,8 @@ jobs:
 #   Azure SIG enforces Major.Minor.Patch where each part must be a
 #   32-bit unsigned integer (max 2,147,483,647).
 #   - Major = 1  (fixed — increment manually for breaking changes)
-#   - Minor = YYYYMMDD  (build date — max value 99991231, well within
-#             the 2,147,483,647 limit)
+#   - Minor = YYYYMMDD  (build date — max value 99991231, well
+#             within the 2,147,483,647 limit)
 #   - Patch = github.run_number  (auto-incrementing integer starting
 #             at 1, unique per workflow, never overflows)
 #   This scheme sorts chronologically and is unique across all runs.
@@ -255,9 +279,19 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC:        "true"
         run: terraform init
 
       - name: Terraform Apply
+        env:
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC:        "true"
         run: |
           terraform apply -auto-approve \
             -var="image_version=${{ needs.detect-images.outputs.version }}"
