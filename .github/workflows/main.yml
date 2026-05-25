@@ -17,8 +17,8 @@ jobs:
 
 # ---------------------------------------------------------------
 # JOB 1 — Foundation
-# Creates RG + SIG + image definitions using Terraform.
-# Already exists? Terraform does nothing. No state needed.
+# Creates RG + SIG + image definitions.
+# Terraform is idempotent — already exists? does nothing.
 # ---------------------------------------------------------------
 
   foundation:
@@ -27,8 +27,41 @@ jobs:
       run:
         working-directory: terraform/foundation
     steps:
-
       - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform plan  -state=/tmp/foundation.tfstate
+      - run: terraform apply -state=/tmp/foundation.tfstate -auto-approve
+
+
+# ---------------------------------------------------------------
+# JOB 2 — Detect + Build + Deploy (single job, sequential steps)
+#
+# Why one job? Because packer-build was "skipped" so deploy-vm
+# never ran. GitHub Actions skips downstream jobs when an
+# upstream job is skipped — even if your condition says otherwise.
+#
+# Solution: detect, build, and deploy all in one job.
+# Steps inside a job run sequentially — no skip problem.
+# ---------------------------------------------------------------
+
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    needs: foundation
+
+    env:
+      RESOURCE_GROUP: rg-canada-prod
+      GALLERY_NAME:   canadaProdSIG
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - uses: azure/login@v2
         with:
@@ -36,35 +69,10 @@ jobs:
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - uses: hashicorp/setup-terraform@v3
-
-      - run: terraform init
-
-      - run: terraform plan   -state=/tmp/foundation.tfstate
-
-      - run: terraform apply  -state=/tmp/foundation.tfstate -auto-approve
-
-
-# ---------------------------------------------------------------
-# JOB 2 — Detect changed images
-# Figures out which packer/* folders changed this push.
-# Builds the version string: 1.YYYYMMDD.RUNNUMBER
-# ---------------------------------------------------------------
-
-  detect-images:
-    runs-on: ubuntu-latest
-    needs: foundation
-    outputs:
-      matrix:     ${{ steps.detect.outputs.matrix }}
-      has_images: ${{ steps.detect.outputs.has_images }}
-      version:    ${{ steps.detect.outputs.version }}
-    steps:
-
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Detect
+      # ---------------------------------------------------------
+      # STEP A — Detect which packer folders changed
+      # ---------------------------------------------------------
+      - name: Detect changed images
         id: detect
         run: |
           VERSION="1.$(date -u +'%Y%m%d').${{ github.run_number }}"
@@ -79,78 +87,58 @@ jobs:
                    | jq -R -s -c 'split("\n") | map(select(length > 0))')
           fi
 
-          if [ "$(echo "$dirs" | jq 'length')" -eq 0 ]; then
-            echo 'matrix={"dir":[]}'  >> "$GITHUB_OUTPUT"
-            echo "has_images=false"   >> "$GITHUB_OUTPUT"
-          else
-            echo "matrix={\"dir\":${dirs}}" >> "$GITHUB_OUTPUT"
-            echo "has_images=true"          >> "$GITHUB_OUTPUT"
-          fi
+          count=$(echo "$dirs" | jq 'length')
+          echo "dirs=${dirs}"  >> "$GITHUB_OUTPUT"
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          echo "Detected ${count} changed image(s): ${dirs}"
 
+      # ---------------------------------------------------------
+      # STEP B — Packer build (skipped if nothing changed)
+      # ---------------------------------------------------------
+      - name: Setup Packer
+        if: steps.detect.outputs.count != '0'
+        uses: hashicorp/setup-packer@main
 
-# ---------------------------------------------------------------
-# JOB 3 — Packer build
-# One parallel job per changed packer/* folder.
-# Builds image and stores it in SIG with the version from Job 2.
-# ---------------------------------------------------------------
+      - name: Packer build
+        if: steps.detect.outputs.count != '0'
+        run: |
+          for dir in $(echo '${{ steps.detect.outputs.dirs }}' | jq -r '.[]'); do
+            echo "========== Building: ${dir} =========="
+            packer init "${dir}"
+            packer build \
+              -var="image_version=${{ steps.detect.outputs.version }}" \
+              "${dir}"
+          done
 
-  packer-build:
-    runs-on: ubuntu-latest
-    needs: detect-images
-    if: needs.detect-images.outputs.has_images == 'true'
-    strategy:
-      matrix: ${{ fromJson(needs.detect-images.outputs.matrix) }}
-      fail-fast: false
-    steps:
+      # ---------------------------------------------------------
+      # STEP C — Deploy VM with Terraform
+      # Runs only when packer built at least one image.
+      # Terraform is idempotent — VM exists? does nothing.
+      # ---------------------------------------------------------
+      - name: Setup Terraform
+        if: steps.detect.outputs.count != '0'
+        uses: hashicorp/setup-terraform@v3
 
-      - uses: actions/checkout@v4
-
-      - uses: azure/login@v2
-        with:
-          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - uses: hashicorp/setup-packer@main
-
-      - run: packer init .
-        working-directory: ${{ matrix.dir }}
-
-      - run: packer build -var="image_version=${{ needs.detect-images.outputs.version }}" .
-        working-directory: ${{ matrix.dir }}
-
-
-# ---------------------------------------------------------------
-# JOB 4 — Deploy VM
-# Terraform creates VM from the image Packer just built.
-# VM already exists? plan shows 0 changes, apply does nothing.
-# ---------------------------------------------------------------
-
-  deploy-vm:
-    runs-on: ubuntu-latest
-    needs: [detect-images, packer-build]
-    if: needs.packer-build.result == 'success'
-    defaults:
-      run:
+      - name: Terraform init
+        if: steps.detect.outputs.count != '0'
         working-directory: terraform/vm
-    steps:
+        run: terraform init
 
-      - uses: actions/checkout@v4
+      - name: Terraform plan
+        if: steps.detect.outputs.count != '0'
+        working-directory: terraform/vm
+        run: |
+          terraform plan \
+            -state=/tmp/vm.tfstate \
+            -var="image_version=${{ steps.detect.outputs.version }}" \
+            -var="ssh_public_key=${{ secrets.AZURE_VM_SSH_PUBLIC_KEY }}"
 
-      - uses: azure/login@v2
-        with:
-          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - uses: hashicorp/setup-terraform@v3
-
-      - run: terraform init
-
-      - run: terraform plan  -state=/tmp/vm.tfstate
-              -var="image_version=${{ needs.detect-images.outputs.version }}"
-              -var="ssh_public_key=${{ secrets.AZURE_VM_SSH_PUBLIC_KEY }}"
-
-      - run: terraform apply -state=/tmp/vm.tfstate -auto-approve
-              -var="image_version=${{ needs.detect-images.outputs.version }}"
-              -var="ssh_public_key=${{ secrets.AZURE_VM_SSH_PUBLIC_KEY }}"
+      - name: Terraform apply
+        if: steps.detect.outputs.count != '0'
+        working-directory: terraform/vm
+        run: |
+          terraform apply \
+            -state=/tmp/vm.tfstate \
+            -auto-approve \
+            -var="image_version=${{ steps.detect.outputs.version }}" \
+            -var="ssh_public_key=${{ secrets.AZURE_VM_SSH_PUBLIC_KEY }}"
