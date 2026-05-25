@@ -4,7 +4,7 @@ location            = "canadacentral"
 gallery_name        = "canadaProdSIG"
 image_name          = "ubuntu-nginx"
 vm_name             = "prod-nginx-vm"
-vm_size             = "Standard_D2s_v5"
+vm_size             = "Standard_B1s"
 admin_username      = "azureuser"
 
 # image_version  — injected by pipeline: -var="image_version=1.20250525.42"
