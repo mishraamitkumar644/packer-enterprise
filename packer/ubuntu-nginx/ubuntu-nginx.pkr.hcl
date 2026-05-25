@@ -69,7 +69,7 @@ source "azure-arm" "ubuntu" {
 
   location           = "canadacentral"
 
-  vm_size            = "Standard_B1s"
+  vm_size            = "Standard_DC2s_v3"
 
   communicator       = "ssh"
 
