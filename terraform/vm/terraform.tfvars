@@ -1,0 +1,11 @@
+subscription_id     = "e397652c-2118-4f8c-918d-90f1bdb9bc73"
+resource_group_name = "rg-canada-prod"
+location            = "canadacentral"
+gallery_name        = "canadaProdSIG"
+image_name          = "ubuntu-nginx"
+vm_name             = "prod-nginx-vm"
+vm_size             = "Standard_D2s_v5"
+admin_username      = "azureuser"
+
+# image_version  — injected by pipeline: -var="image_version=1.20250525.42"
+# ssh_public_key — injected by pipeline: -var="ssh_public_key=$SECRET"

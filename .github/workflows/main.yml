@@ -1,0 +1,156 @@
+name: Platform Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'packer/**'
+      - 'terraform/**'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+
+# ---------------------------------------------------------------
+# JOB 1 — Foundation
+# Creates RG + SIG + image definitions using Terraform.
+# Already exists? Terraform does nothing. No state needed.
+# ---------------------------------------------------------------
+
+  foundation:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform/foundation
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - run: terraform init
+
+      - run: terraform plan   -state=/dev/null
+
+      - run: terraform apply  -state=/dev/null -auto-approve
+
+
+# ---------------------------------------------------------------
+# JOB 2 — Detect changed images
+# Figures out which packer/* folders changed this push.
+# Builds the version string: 1.YYYYMMDD.RUNNUMBER
+# ---------------------------------------------------------------
+
+  detect-images:
+    runs-on: ubuntu-latest
+    needs: foundation
+    outputs:
+      matrix:     ${{ steps.detect.outputs.matrix }}
+      has_images: ${{ steps.detect.outputs.has_images }}
+      version:    ${{ steps.detect.outputs.version }}
+    steps:
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect
+        id: detect
+        run: |
+          VERSION="1.$(date -u +'%Y%m%d').${{ github.run_number }}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            dirs=$(find packer -mindepth 1 -maxdepth 1 -type d | sort \
+                   | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          else
+            dirs=$(git diff --name-only HEAD~1 HEAD \
+                   | grep '^packer/' | awk -F'/' '{print $1"/"$2}' | sort -u \
+                   | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          fi
+
+          if [ "$(echo "$dirs" | jq 'length')" -eq 0 ]; then
+            echo 'matrix={"dir":[]}'  >> "$GITHUB_OUTPUT"
+            echo "has_images=false"   >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix={\"dir\":${dirs}}" >> "$GITHUB_OUTPUT"
+            echo "has_images=true"          >> "$GITHUB_OUTPUT"
+          fi
+
+
+# ---------------------------------------------------------------
+# JOB 3 — Packer build
+# One parallel job per changed packer/* folder.
+# Builds image and stores it in SIG with the version from Job 2.
+# ---------------------------------------------------------------
+
+  packer-build:
+    runs-on: ubuntu-latest
+    needs: detect-images
+    if: needs.detect-images.outputs.has_images == 'true'
+    strategy:
+      matrix: ${{ fromJson(needs.detect-images.outputs.matrix) }}
+      fail-fast: false
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-packer@main
+
+      - run: packer init .
+        working-directory: ${{ matrix.dir }}
+
+      - run: packer build -var="image_version=${{ needs.detect-images.outputs.version }}" .
+        working-directory: ${{ matrix.dir }}
+
+
+# ---------------------------------------------------------------
+# JOB 4 — Deploy VM
+# Terraform creates VM from the image Packer just built.
+# VM already exists? plan shows 0 changes, apply does nothing.
+# ---------------------------------------------------------------
+
+  deploy-vm:
+    runs-on: ubuntu-latest
+    needs: [detect-images, packer-build]
+    if: needs.packer-build.result == 'success'
+    defaults:
+      run:
+        working-directory: terraform/vm
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - run: terraform init
+
+      - run: terraform plan  -state=/dev/null
+              -var="image_version=${{ needs.detect-images.outputs.version }}"
+              -var="ssh_public_key=${{ secrets.AZURE_VM_SSH_PUBLIC_KEY }}"
+
+      - run: terraform apply -state=/dev/null -auto-approve
+              -var="image_version=${{ needs.detect-images.outputs.version }}"
+              -var="ssh_public_key=${{ secrets.AZURE_VM_SSH_PUBLIC_KEY }}"
