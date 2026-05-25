@@ -119,7 +119,19 @@ jobs:
           done
 
       # ---------------------------------------------------------
-      # STEP D — Deploy VM with Terraform
+      # STEP D — Fresh Azure login before Terraform
+      # (OIDC token expires in ~5 min — packer build can take longer)
+      # ---------------------------------------------------------
+      - name: Azure login (Terraform)
+        if: steps.detect.outputs.count != '0'
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ---------------------------------------------------------
+      # STEP E — Deploy VM with Terraform
       # Runs only when packer built at least one image.
       # Terraform is idempotent — VM exists? does nothing.
       # ---------------------------------------------------------
